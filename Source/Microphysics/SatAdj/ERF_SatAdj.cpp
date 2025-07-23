@@ -46,14 +46,18 @@ void SatAdj::AdvanceSatAdj (const SolverChoice& /*solverChoice*/)
         const IntVect ntbox  = tbx.size();
 
         // Vector of inputs
-        Vector<Array4<Real>> vec_ml_in = {tabs_array, pres_array,
-                                            qv_array,   qc_array};
+        Vector<Array4<Real>> vec_ml_in = {tabs_array,
+                                            qv_array,
+                                            qc_array,
+                                            pres_array};
 
         // Copy the ML inputs into auxiliary array
         for (int n(0); n<nin; ++n) {
             Array4<Real> data_arr = vec_ml_in[n];
             ParallelFor(tbx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept
             {
+                // n is indexing the variable 
+
                 // Flatten indexing
                 int ii = i - tbx_lo[0];
                 int jj = j - tbx_lo[1];
@@ -61,10 +65,41 @@ void SatAdj::AdvanceSatAdj (const SolverChoice& /*solverChoice*/)
                 int kk = k - tbx_lo[2];
                 index += kk*ntbox[0]*ntbox[1];
 
-                // NOTE: No scaling is done here yet!
+                auto temporary = data_arr(i,j,k);
+
+                // temperature scaling
+                if (n == 0) {
+                    // Apply MinMax scaling fit to training data
+                    temporary = temperature_scaler_input.apply_scaling(temporary);
+                }
+
+                // qv scaling
+                if (n == 1) {
+                    // log(x + 1)-transform
+                    temporary = std::log10(temporary + 1);
+                    // MinMax scaling fit to training data
+                    temporary = qv_scaler_input.apply_scaling(temporary);
+                }
+
+                // qc scaling
+                if (n == 2) {
+                    // log(x + 1)-transform
+                    temporary = std::log10(temporary + 1);
+                    // MinMax scaling fit to training data
+                    temporary = qc_scaler_input.apply_scaling(temporary);
+                }
+
+                // pressure scaling
+                if (n == 3) {
+                    // apply log-transform to pressure variable
+                    temporary = std::log10(temporary);
+                    // MinMax scaling fit to training data
+                    temporary = pres_scaler_input.apply_scaling(temporary);
+                }
+
 
                 // array order is row-based [index][comp]
-                ML_auxPtr[index*nin + n] = data_arr(i,j,k);
+                ML_auxPtr[index*nin + n] = temporary;
             });
         } // n
 
@@ -91,15 +126,22 @@ void SatAdj::AdvanceSatAdj (const SolverChoice& /*solverChoice*/)
             // Conserve total moisture
             Real Qt = qv_array(i,j,k) + qc_array(i,j,k);
 
-            // NOTE: No unscaling is done yet!
+            // ML output is {T, qv, qc}
+            Real T_out_scaled = static_cast<Real>(outputs_torch_acc[index][0]);
+            Real qv_out_scaled = static_cast<Real>(outputs_torch_acc[index][1]);
 
-            // ML output is {dT, dQv, dQc}
-            Real dT  = static_cast<Real>(outputs_torch_acc[index][0]);
-            Real dQv = static_cast<Real>(outputs_torch_acc[index][1]);
-            tabs_array(i,j,k) += dT;
-              qv_array(i,j,k) += dQv;
-              qc_array(i,j,k) -= dQv;
-           theta_array(i,j,k)  = getThgivenPandT(tabs_array(i,j,k), pres_array(i,j,k), rdOcp);
+            // Undo MinMax scaling for output variables
+            // Scaler was fit to output variables in training data
+            Real T_out = temperature_scaler_output.undo_scaling(T_out_scaled);
+            Real qv_out = qv_scaler_output.undo_scaling(qv_out);
+
+            // undo log-transform for qv
+            qv_out = std::exp(qv_out) - 1;
+
+            tabs_array(i,j,k) = T_out;
+              qv_array(i,j,k) = qv_out;
+              qc_array(i,j,k) = Qt - qv_out;
+           theta_array(i,j,k) = getThgivenPandT(tabs_array(i,j,k), pres_array(i,j,k), rdOcp);
 
             // Clip
             qv_array(i,j,k) = std::max(0.0, qv_array(i,j,k));

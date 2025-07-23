@@ -41,6 +41,26 @@ namespace MicVar_SatAdj {
   };
 }
 
+// Reproduce functionality from sklearn.preprocessing.MinMaxScaler
+// The fitted scaling parameters from the training run are hard-coded below.
+struct MinMaxScaler {
+    amrex::Real data_min;
+    amrex::Real data_max;
+    amrex::Real scale;
+    amrex::Real min;
+
+    // These are the scaling and unscaling methods for the general case
+    // With the range [0,1] they reduce to usual linear scaling
+    // It might be wise to use that instead.
+    amrex::Real apply_scaling(amrex::Real unscaled_value) {
+        return (unscaled_value - data_min) / (data_max - data_min);
+    }
+
+    amrex::Real undo_scaling(amrex::Real scaled_value) {
+        return scaled_value * (data_max - data_min) + data_min;
+    }
+};
+
 class SatAdj : public NullMoist {
 
     using FabPtr = std::shared_ptr<amrex::MultiFab>;
@@ -212,7 +232,59 @@ private:
     amrex::Array<FabPtr, MicVar_SatAdj::NumVars> mic_fab_vars;
 
     // ML model
-    std::string model_filename = "my_filename.pt";
+    std::string model_filename = "/home/slamoureux/ERF_ML/SatAdj/NNModel/model.pt";
     torch::jit::script::Module SatAdj_ML;
+
+    // hard-code scaler parameters for X and Y from last training run
+    // NOTE: normalization is applied after log-transforms
+    // log-transforms are applied to pressure, qv_in, qv_out, qc_in, qc_out
+    MinMaxScaler temperature_scaler_input {
+        data_min: 190.0015527625396,
+        data_max: 322.9978361188041,
+        scale: 0.0075190071088020154,
+        min: -1.4286230259049566
+    };
+
+    MinMaxScaler qv_scaler_input {
+        data_min: 1.0581849347204382e-11,
+        data_max: 0.06805378571493718,
+        scale: 14.694259689597278,
+        min: -1.554924423040166e-10
+    };
+
+    MinMaxScaler qc_scaler_input {
+        data_min: 1.5335639184360813e-07,
+        data_max: 0.004987455427613876,
+        scale: 200.50921033443063,
+        min: -3.074936902829939e-05
+    };
+
+    MinMaxScaler pres_scaler_input {
+        data_min: 3.0020239296741202,
+        data_max: 4.999991929195109,
+        scale: 0.5005085167729159,
+        min: -1.5025385443579942
+    };
+
+    MinMaxScaler temperature_scaler_output {
+        data_min: 190.00152870902016,
+        data_max: 374.2928539946578,
+        scale: 0.00542619137634436,
+        min: -1.0309846565731304,
+    };
+
+    MinMaxScaler qv_scaler_output {
+        data_min: 3.7155708745993287e-09,
+        data_max: 0.058699716379879086,
+        scale: 17.0358585180612,
+        min: -6.329793973350308e-08,
+    };
+
+    MinMaxScaler qc_scaler_output {
+        data_min: 0.0,
+        data_max: 0.026549110225738238,
+        scale: 37.66604573551932,
+        min: 0.0
+    };
 };
 #endif
